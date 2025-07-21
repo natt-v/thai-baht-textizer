@@ -6,9 +6,11 @@ A Go library for converting numeric amounts to Thai text representation followin
 
 ✅ **Multiple Input Types**: Support for `string`, `int`, `uint`, `float32`, `float64` and their variants  
 ✅ **Thai Language Rules**: Proper use of "เอ็ด" vs "หนึ่ง" based on position  
-✅ **Configurable Rounding**: Multiple decimal rounding modes with overflow handling  
-✅ **Large Numbers**: Support for millions with proper grouping  
-✅ **Error Handling**: Returns descriptive errors for unsupported types  
+✅ **Configurable Rounding**: Three decimal rounding modes (RoundHalf, RoundDown, RoundUp)  
+✅ **Overflow Control**: Optional overflow behavior for precise financial calculations  
+✅ **Large Numbers**: Support for numbers up to 99,999,999,999,999,999,999 (20 digits) with proper million grouping  
+✅ **Input Validation**: Validates maximum supported values and input types  
+✅ **Error Handling**: Returns descriptive errors for unsupported types and exceeded limits  
 ✅ **Warning Logs**: Optional logging for satang capping edge cases  
 ✅ **Comprehensive Testing**: Full test coverage with edge cases  
 
@@ -61,11 +63,9 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error)
 
 ```go
 const (
-    RoundHalf         // Round half (0.455 → 0.46, 0.454 → 0.45) - DEFAULT
-    RoundDown         // Always truncate (0.456 → 0.45)
-    RoundUp           // Always round up (0.451 → 0.46), caps at 99 satang
-    RoundUpOverflow   // Round up with overflow (can increase baht amount)
-    RoundHalfOverflow // Round half with overflow (can increase baht amount)
+    RoundHalf DecimalRoundingMode = iota // Round to nearest (default)
+    RoundDown                            // Always truncate
+    RoundUp                              // Always round up
 )
 ```
 
@@ -84,22 +84,33 @@ result, _ = thbtextizer.Convert("123.451", thbtextizer.RoundUp)
 // Output: "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์" (123.46)
 ```
 
-### Special Case: 99 Satang Cap Handling
+## Configuration
 
-When rounding would result in 100+ satang:
+### Overflow Control
+
+Control whether rounding can overflow to the next baht amount:
 
 ```go
-// Standard modes cap at 99 satang with warning log
+// Default: cap satang at 99
+thbtextizer.SetAllowOverflow(false) // Default behavior
 result, _ := thbtextizer.Convert("100.995", thbtextizer.RoundHalf)
 // Output: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์" (100.99)
 // Log: "Warning: 995 rounds to 100 satang, forced to round down..."
 
-// Overflow modes properly overflow to next baht
-result, _ := thbtextizer.Convert("100.995", thbtextizer.RoundUpOverflow)
+// Enable overflow to next baht
+thbtextizer.SetAllowOverflow(true)
+result, _ = thbtextizer.Convert("100.995", thbtextizer.RoundHalf)
 // Output: "หนึ่งร้อยเอ็ดบาทถ้วน" (101.00)
+```
 
-result, _ = thbtextizer.Convert("100.995", thbtextizer.RoundHalfOverflow)
-// Output: "หนึ่งร้อยเอ็ดบาทถ้วน" (101.00)
+### Warning Control
+
+```go
+// Disable warning logs for cleaner output
+thbtextizer.SetWarningLogs(false)
+
+// Re-enable warnings (default)
+thbtextizer.SetWarningLogs(true)
 ```
 
 ## Input Type Support
@@ -176,45 +187,31 @@ result, _ = thbtextizer.Convert("100000001.01")
 // Output: "หนึ่งร้อยล้านเอ็ดบาทหนึ่งสตางค์"
 ```
 
-## Warning Log Control
-
-By default, the library logs warnings when satang is capped at 99. You can control this behavior:
-
-### Disable Warning Logs
-
-```go
-// Method 1: Using SetWarningLogs function
-thbtextizer.SetWarningLogs(false)
-
-// Method 2: Direct variable access
-thbtextizer.EnableWarningLogs = false
-
-// Now conversions won't print warnings
-result, _ := thbtextizer.Convert("100.995") // No warning log
-```
-
-### Re-enable Warning Logs
-
-```go
-thbtextizer.SetWarningLogs(true)
-// or
-thbtextizer.EnableWarningLogs = true
-```
-
-### Example Warning Log
-
-```
-2025/07/21 18:39:12 Warning: 995 rounds to 100 satang, forced to round down to 99 satang to maintain currency format. Consider using RoundHalfOverflow or RoundUpOverflow mode.
-```
 
 ## Error Handling
 
+The library validates input and returns descriptive errors for various scenarios:
+
+### Unsupported Types
 ```go
 result, err := thbtextizer.Convert([]int{1, 2, 3})
 if err != nil {
     fmt.Printf("Error: %v\n", err)
     // Error: unsupported type: only string, int, uint, float32, float64 and their variants are supported
 }
+```
+
+### Maximum Value Exceeded
+```go
+result, err := thbtextizer.Convert("100000000000000000000") // 21 digits
+if err != nil {
+    fmt.Printf("Error: %v\n", err)
+    // Error: input number exceeds maximum supported value of 99999999999999999999 (got 21 digits, max 20 digits)
+}
+
+// Maximum supported value (20 digits)
+result, err = thbtextizer.Convert("99999999999999999999")
+// This works fine
 ```
 
 ## Testing
@@ -261,7 +258,7 @@ import (
     "fmt"
     "log"
     
-    "github.com/natt-v/thai-baht-textizer"
+    thbtextizer "github.com/natt-v/thai-baht-textizer"
 )
 
 func main() {
@@ -284,7 +281,7 @@ func main() {
 }
 ```
 
-### Advanced Usage with Rounding Modes
+### Advanced Usage with Configuration
 
 ```go
 package main
@@ -298,27 +295,32 @@ import (
 func main() {
     amount := "123.456"
     
+    // Test different rounding modes
     modes := []thbtextizer.DecimalRoundingMode{
         thbtextizer.RoundHalf,
         thbtextizer.RoundDown,
         thbtextizer.RoundUp,
-        thbtextizer.RoundUpOverflow,
-        thbtextizer.RoundHalfOverflow,
     }
     
-    modeNames := []string{"RoundHalf", "RoundDown", "RoundUp", "RoundUpOverflow", "RoundHalfOverflow"}
+    modeNames := []string{"RoundHalf", "RoundDown", "RoundUp"}
     
     for i, mode := range modes {
         result, _ := thbtextizer.Convert(amount, mode)
         fmt.Printf("%s: %s\n", modeNames[i], result)
     }
     
-    // Disable warnings for cleaner output
-    thbtextizer.SetWarningLogs(false)
+    // Test overflow behavior
+    thbtextizer.SetWarningLogs(false) // Disable warnings for cleaner output
     
-    // Test edge case
-    result, _ := thbtextizer.Convert("100.995", thbtextizer.RoundHalfOverflow)
-    fmt.Printf("Edge case (100.995 with RoundHalfOverflow): %s\n", result)
+    // Test with overflow disabled (default)
+    thbtextizer.SetAllowOverflow(false)
+    result1, _ := thbtextizer.Convert("100.995", thbtextizer.RoundHalf)
+    fmt.Printf("No overflow: %s\n", result1)
+    
+    // Test with overflow enabled
+    thbtextizer.SetAllowOverflow(true)
+    result2, _ := thbtextizer.Convert("100.995", thbtextizer.RoundHalf)
+    fmt.Printf("With overflow: %s\n", result2)
 }
 ```
 
@@ -340,9 +342,9 @@ MIT License - see LICENSE file for details.
 
 ## Changelog
 
-### v1.0.0
-- Initial release with full Thai baht text conversion
-- Support for multiple input types
-- Configurable rounding modes with overflow handling
-- Warning log control
-- Comprehensive test coverage
+See [CHANGELOG.md](CHANGELOG.md) for detailed release history.
+
+### Recent Releases
+
+**v1.1.0** - Simplified API with improved overflow control
+**v1.0.0** - Initial release with full Thai baht text conversion

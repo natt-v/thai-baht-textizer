@@ -97,7 +97,6 @@ func TestConvert(t *testing.T) {
 			input:    "100.31",
 			expected: "หนึ่งร้อยบาทสามสิบเอ็ดสตางค์",
 		},
-		// Additional comprehensive test cases
 		{
 			input:    "0",
 			expected: "ศูนย์บาทถ้วน",
@@ -117,6 +116,14 @@ func TestConvert(t *testing.T) {
 		{
 			input:    "999999999.99",
 			expected: "เก้าร้อยเก้าสิบเก้าล้านเก้าแสนเก้าหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าบาทเก้าสิบเก้าสตางค์",
+		},
+		{
+			input:    "1234567889999999999",
+			expected: "หนึ่งล้านสองแสนสามหมื่นสี่พันห้าร้อยหกสิบเจ็ดล้านแปดแสนแปดหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าล้านเก้าแสนเก้าหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าบาทถ้วน",
+		},
+		{
+			input:    "18446744073709551615",
+			expected: "สิบแปดล้านสี่แสนสี่หมื่นหกพันเจ็ดร้อยสี่สิบสี่ล้านเจ็ดหมื่นสามพันเจ็ดร้อยเก้าล้านห้าแสนห้าหมื่นหนึ่งพันหกร้อยสิบห้าบาทถ้วน",
 		},
 	}
 
@@ -138,7 +145,6 @@ func TestConvertWithRounding(t *testing.T) {
 		roundingMode DecimalRoundingMode
 		expected     string
 	}{
-		// Test RoundHalf (default)
 		{
 			input:        "123.456",
 			roundingMode: RoundHalf,
@@ -198,10 +204,24 @@ func TestConvertWithRounding(t *testing.T) {
 			roundingMode: RoundHalf,
 			expected:     "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", // 0.990 -> 0.99
 		},
+		{
+			input:        "123.456",
+			roundingMode: -1,                                    // Special marker for testing default behavior
+			expected:     "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์", // Default should use RoundHalf
+		},
 	}
 
 	for _, test := range tests {
-		result, err := Convert(test.input, test.roundingMode)
+		var result string
+		var err error
+
+		if test.roundingMode == -1 {
+			// Test default behavior (no rounding mode specified)
+			result, err = Convert(test.input)
+		} else {
+			result, err = Convert(test.input, test.roundingMode)
+		}
+
 		if err != nil {
 			t.Errorf("Convert(%s, %v) returned error: %v", test.input, test.roundingMode, err)
 			continue
@@ -209,61 +229,6 @@ func TestConvertWithRounding(t *testing.T) {
 		if result != test.expected {
 			t.Errorf("Convert(%s, %v) = %s, expected %s",
 				test.input, test.roundingMode, result, test.expected)
-		}
-	}
-}
-
-func TestConvertWithInitRounding(t *testing.T) {
-	tests := []struct {
-		input        string
-		roundingMode DecimalRoundingMode
-		expected     string
-		description  string
-	}{
-		{
-			input:       "123.456",
-			expected:    "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์",
-			description: "Default (no rounding mode) should use RoundHalf",
-		},
-		{
-			input:        "123.456",
-			roundingMode: RoundDown,
-			expected:     "หนึ่งร้อยยี่สิบสามบาทสี่สิบห้าสตางค์",
-			description:  "Explicit RoundDown should truncate",
-		},
-		{
-			input:        "123.456",
-			roundingMode: RoundHalf,
-			expected:     "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์",
-			description:  "RoundHalf should round up 0.456",
-		},
-		{
-			input:        "123.451",
-			roundingMode: RoundUp,
-			expected:     "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์",
-			description:  "RoundUp should always round up",
-		},
-	}
-
-	for _, test := range tests {
-		var result string
-		var err error
-		if test.roundingMode == 0 && test.description == "Default (no rounding mode) should use RoundHalf" {
-			// Test default behavior (no rounding mode specified)
-			result, err = Convert(test.input)
-		} else {
-			// Test with explicit rounding mode
-			result, err = Convert(test.input, test.roundingMode)
-		}
-
-		if err != nil {
-			t.Errorf("%s: Convert(%s) returned error: %v", test.description, test.input, err)
-			continue
-		}
-
-		if result != test.expected {
-			t.Errorf("%s: Convert(%s) = %s, expected %s",
-				test.description, test.input, result, test.expected)
 		}
 	}
 }
@@ -333,37 +298,84 @@ func TestConvertWithInvalidTypes(t *testing.T) {
 	}
 }
 
-func TestConvertWithOverflowHandling(t *testing.T) {
-	// Disable warning logs for cleaner test output
-	originalLogSetting := EnableWarningLogs
-	EnableWarningLogs = false
-	defer func() { EnableWarningLogs = originalLogSetting }()
-
+func TestConvertWithExceedingMaxValue(t *testing.T) {
 	tests := []struct {
-		input        string
-		roundingMode DecimalRoundingMode
-		expected     string
-		name         string
+		input       string
+		expectError bool
+		description string
 	}{
-		// Test 0.995 case with different rounding modes
-		{input: "100.995", roundingMode: RoundHalf, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.995 with RoundHalf (forced down)"},
-		{input: "100.995", roundingMode: RoundUp, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.995 with RoundUp (capped)"},
-		{input: "100.995", roundingMode: RoundUpOverflow, expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.995 with RoundUpOverflow (overflow to 101)"},
-		{input: "100.995", roundingMode: RoundHalfOverflow, expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.995 with RoundHalfOverflow (overflow to 101)"},
-		{input: "100.999", roundingMode: RoundUpOverflow, expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.999 with RoundUpOverflow (overflow to 101)"},
+		// Valid values (should not error)
+		{input: MaxSupportedValue, expectError: false, description: "exact max value"},
+		{input: "18446744073709551615", expectError: false, description: "uint64 max value"},
+		{input: "1234567889999999999", expectError: false, description: "19 digits under max"},
+		{input: "12345678901234567890", expectError: false, description: "20 digits at max"},
 
-		// Test other edge cases
-		{input: "50.996", roundingMode: RoundHalf, expected: "ห้าสิบบาทเก้าสิบเก้าสตางค์", name: "0.996 with RoundHalf (forced down)"},
-		{input: "50.996", roundingMode: RoundUpOverflow, expected: "ห้าสิบเอ็ดบาทถ้วน", name: "0.996 with RoundUpOverflow (overflow to 51)"},
-		{input: "50.996", roundingMode: RoundHalfOverflow, expected: "ห้าสิบเอ็ดบาทถ้วน", name: "0.996 with RoundHalfOverflow (overflow to 51)"},
+		// Invalid values (should error)
+		{input: "100000000000000000000", expectError: true, description: "21 digits - exceeds max"},
+		{input: "999999999999999999999", expectError: true, description: "21 digits - much larger"},
+		{input: "123456789012345678901", expectError: true, description: "21 digits - way over max"},
+		{input: "999999999999999999999999999", expectError: true, description: "27 digits - extremely large"},
 
-		// Test RoundHalfOverflow vs RoundHalf behavior difference
-		{input: "100.994", roundingMode: RoundHalf, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.994 with RoundHalf (no overflow needed)"},
-		{input: "100.994", roundingMode: RoundHalfOverflow, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.994 with RoundHalfOverflow (no overflow needed)"},
-		{input: "100.991", roundingMode: RoundUp, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.991 with RoundUp (normal)"},
+		// Edge cases
+		{input: "000100000000000000000000", expectError: true, description: "leading zeros but exceeds when trimmed"},
+		{input: "000099999999999999999999", expectError: false, description: "leading zeros, valid when trimmed"},
 	}
 
 	for _, test := range tests {
+		result, err := Convert(test.input)
+
+		if test.expectError {
+			if err == nil {
+				t.Errorf("%s: Expected error for input %s, but got result: %s", test.description, test.input, result)
+			}
+			if result != "" {
+				t.Errorf("%s: Expected empty result for invalid input, got: %s", test.description, result)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("%s: Unexpected error for valid input %s: %v", test.description, test.input, err)
+			}
+		}
+	}
+}
+
+func TestConvertWithOverflowHandling(t *testing.T) {
+	// Disable warning logs for cleaner test output
+	originalLogSetting := EnableWarningLogs
+	originalOverflowSetting := AllowOverflow
+	EnableWarningLogs = false
+	defer func() {
+		EnableWarningLogs = originalLogSetting
+		AllowOverflow = originalOverflowSetting
+	}()
+
+	tests := []struct {
+		input         string
+		roundingMode  DecimalRoundingMode
+		allowOverflow bool
+		expected      string
+		name          string
+	}{
+		// Test 0.995 case with different rounding modes
+		{input: "100.995", roundingMode: RoundHalf, allowOverflow: false, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.995 with RoundHalf (forced down)"},
+		{input: "100.995", roundingMode: RoundUp, allowOverflow: false, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.995 with RoundUp (capped)"},
+		{input: "100.995", roundingMode: RoundUp, allowOverflow: true, expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.995 with RoundUp and overflow (overflow to 101)"},
+		{input: "100.995", roundingMode: RoundHalf, allowOverflow: true, expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.995 with RoundHalf and overflow (overflow to 101)"},
+		{input: "100.999", roundingMode: RoundUp, allowOverflow: true, expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.999 with RoundUp and overflow (overflow to 101)"},
+
+		// Test other edge cases
+		{input: "50.996", roundingMode: RoundHalf, allowOverflow: false, expected: "ห้าสิบบาทเก้าสิบเก้าสตางค์", name: "0.996 with RoundHalf (forced down)"},
+		{input: "50.996", roundingMode: RoundUp, allowOverflow: true, expected: "ห้าสิบเอ็ดบาทถ้วน", name: "0.996 with RoundUp and overflow (overflow to 51)"},
+		{input: "50.996", roundingMode: RoundHalf, allowOverflow: true, expected: "ห้าสิบเอ็ดบาทถ้วน", name: "0.996 with RoundHalf and overflow (overflow to 51)"},
+
+		// Test RoundHalf vs overflow behavior difference
+		{input: "100.994", roundingMode: RoundHalf, allowOverflow: false, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.994 with RoundHalf (no overflow needed)"},
+		{input: "100.994", roundingMode: RoundHalf, allowOverflow: true, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.994 with RoundHalf and overflow (no overflow needed)"},
+		{input: "100.991", roundingMode: RoundUp, allowOverflow: false, expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.991 with RoundUp (normal)"},
+	}
+
+	for _, test := range tests {
+		AllowOverflow = test.allowOverflow
 		result, err := Convert(test.input, test.roundingMode)
 		if err != nil {
 			t.Errorf("%s: Convert(%s, %v) returned error: %v", test.name, test.input, test.roundingMode, err)
@@ -375,143 +387,14 @@ func TestConvertWithOverflowHandling(t *testing.T) {
 	}
 }
 
-func TestRoundHalfOverflow(t *testing.T) {
-	// Disable warning logs for cleaner test output
-	originalLogSetting := EnableWarningLogs
-	EnableWarningLogs = false
-	defer func() { EnableWarningLogs = originalLogSetting }()
-
-	tests := []struct {
-		input    string
-		expected string
-		name     string
-	}{
-		// Test cases where RoundHalfOverflow differs from RoundHalf
-		{input: "100.995", expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.995 overflows to 101.00"},
-		{input: "50.995", expected: "ห้าสิบเอ็ดบาทถ้วน", name: "0.995 overflows to 51.00"},
-		{input: "999.995", expected: "หนึ่งพันบาทถ้วน", name: "0.995 overflows to 1000.00"},
-
-		// Test cases where both modes behave the same (no overflow needed)
-		{input: "100.994", expected: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", name: "0.994 rounds down normally"},
-		{input: "100.996", expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.996 overflows to 101.00"},
-		{input: "100.999", expected: "หนึ่งร้อยเอ็ดบาทถ้วน", name: "0.999 overflows to 101.00"},
-
-		// Test edge cases with different decimal patterns
-		{input: "99.995", expected: "หนึ่งร้อยบาทถ้วน", name: "99.995 overflows to 100.00"},
-		{input: "199.995", expected: "สองร้อยบาทถ้วน", name: "199.995 overflows to 200.00"},
-		{input: "999.995", expected: "หนึ่งพันบาทถ้วน", name: "999.995 overflows to 1000.00"},
-
-		// Test with large numbers
-		{input: "999999.995", expected: "หนึ่งล้านบาทถ้วน", name: "999999.995 overflows to 1000000.00"},
-		{input: "1000000.995", expected: "หนึ่งล้านเอ็ดบาทถ้วน", name: "1000000.995 overflows to 1000001.00"},
-
-		// Test cases that don't trigger overflow
-		{input: "123.454", expected: "หนึ่งร้อยยี่สิบสามบาทสี่สิบห้าสตางค์", name: "0.454 rounds down"},
-		{input: "123.456", expected: "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์", name: "0.456 rounds up"},
-		{input: "123.455", expected: "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์", name: "0.455 rounds up"},
-
-		// Test with zero cases
-		{input: "0.995", expected: "หนึ่งบาทถ้วน", name: "0.995 overflows to 1.00"},
-		{input: "0.994", expected: "ศูนย์บาทเก้าสิบเก้าสตางค์", name: "0.994 rounds down"},
-	}
-
-	for _, test := range tests {
-		result, err := Convert(test.input, RoundHalfOverflow)
-		if err != nil {
-			t.Errorf("%s: Convert(%s, RoundHalfOverflow) returned error: %v", test.name, test.input, err)
-			continue
-		}
-		if result != test.expected {
-			t.Errorf("%s: Convert(%s, RoundHalfOverflow) = %s, expected %s", test.name, test.input, result, test.expected)
-		}
-	}
-}
-
-func TestRoundHalfVsRoundHalfOverflowComparison(t *testing.T) {
-	// Disable warning logs for cleaner test output
-	originalLogSetting := EnableWarningLogs
-	EnableWarningLogs = false
-	defer func() { EnableWarningLogs = originalLogSetting }()
-
-	tests := []struct {
-		input            string
-		expectedStandard string // RoundHalf result
-		expectedOverflow string // RoundHalfOverflow result
-		shouldDiffer     bool   // Whether the results should be different
-		name             string
-	}{
-		// Cases where they should differ (overflow scenarios)
-		{
-			input:            "100.995",
-			expectedStandard: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์", // Capped at 99
-			expectedOverflow: "หนึ่งร้อยเอ็ดบาทถ้วน",          // Overflows to 101
-			shouldDiffer:     true,
-			name:             "0.995 case",
-		},
-		{
-			input:            "50.996",
-			expectedStandard: "ห้าสิบบาทเก้าสิบเก้าสตางค์", // Capped at 99
-			expectedOverflow: "ห้าสิบเอ็ดบาทถ้วน",          // Overflows to 51
-			shouldDiffer:     true,
-			name:             "0.996 case",
-		},
-
-		// Cases where they should be the same (no overflow needed)
-		{
-			input:            "100.994",
-			expectedStandard: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์",
-			expectedOverflow: "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์",
-			shouldDiffer:     false,
-			name:             "0.994 case (no overflow)",
-		},
-		{
-			input:            "123.456",
-			expectedStandard: "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์",
-			expectedOverflow: "หนึ่งร้อยยี่สิบสามบาทสี่สิบหกสตางค์",
-			shouldDiffer:     false,
-			name:             "0.456 case (normal rounding)",
-		},
-	}
-
-	for _, test := range tests {
-		resultStandard, err1 := Convert(test.input, RoundHalf)
-		resultOverflow, err2 := Convert(test.input, RoundHalfOverflow)
-
-		if err1 != nil {
-			t.Errorf("%s: Convert(%s, RoundHalf) returned error: %v", test.name, test.input, err1)
-			continue
-		}
-		if err2 != nil {
-			t.Errorf("%s: Convert(%s, RoundHalfOverflow) returned error: %v", test.name, test.input, err2)
-			continue
-		}
-
-		// Check standard mode result
-		if resultStandard != test.expectedStandard {
-			t.Errorf("%s: Convert(%s, RoundHalf) = %s, expected %s", test.name, test.input, resultStandard, test.expectedStandard)
-		}
-
-		// Check overflow mode result
-		if resultOverflow != test.expectedOverflow {
-			t.Errorf("%s: Convert(%s, RoundHalfOverflow) = %s, expected %s", test.name, test.input, resultOverflow, test.expectedOverflow)
-		}
-
-		// Check if difference matches expectation
-		actuallyDiffer := resultStandard != resultOverflow
-		if actuallyDiffer != test.shouldDiffer {
-			if test.shouldDiffer {
-				t.Errorf("%s: Expected modes to give different results, but both returned: %s", test.name, resultStandard)
-			} else {
-				t.Errorf("%s: Expected modes to give same results, but got Standard='%s', Overflow='%s'", test.name, resultStandard, resultOverflow)
-			}
-		}
-	}
-}
-
 func TestWarningLogControl(t *testing.T) {
 	// Test that warning logs can be enabled/disabled
 	originalLogSetting := EnableWarningLogs
-	defer func() { EnableWarningLogs = originalLogSetting }()
+	originalOverflowSetting := AllowOverflow
+	defer func() {
+		EnableWarningLogs = originalLogSetting
+		AllowOverflow = originalOverflowSetting
+	}()
 
 	// Test SetWarningLogs function
 	SetWarningLogs(false)
@@ -524,8 +407,20 @@ func TestWarningLogControl(t *testing.T) {
 		t.Errorf("SetWarningLogs(true) failed, EnableWarningLogs = %v", EnableWarningLogs)
 	}
 
+	// Test SetAllowOverflow function
+	SetAllowOverflow(false)
+	if AllowOverflow != false {
+		t.Errorf("SetAllowOverflow(false) failed, AllowOverflow = %v", AllowOverflow)
+	}
+
+	SetAllowOverflow(true)
+	if AllowOverflow != true {
+		t.Errorf("SetAllowOverflow(true) failed, AllowOverflow = %v", AllowOverflow)
+	}
+
 	// Test that conversion still works with logging disabled
 	SetWarningLogs(false)
+	SetAllowOverflow(false)
 	result, err := Convert("100.995", RoundHalf)
 	if err != nil {
 		t.Errorf("Convert with logging disabled returned error: %v", err)

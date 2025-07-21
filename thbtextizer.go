@@ -11,12 +11,15 @@ import (
 type DecimalRoundingMode int
 
 const (
-	RoundHalf         DecimalRoundingMode = iota // Always round half - DEFAULT
-	RoundDown                                    // Always round down (truncate)
-	RoundUp                                      // Always round up (capping satang at 99)
-	RoundUpOverflow                              // Round up with overflow (can increase baht amount)
-	RoundHalfOverflow                            // Round half with overflow (can increase baht amount)
+	RoundHalf DecimalRoundingMode = iota
+	RoundDown
+	RoundUp
 )
+
+// MaxSupportedValue is the maximum number we can reliably convert to Thai text
+// This is set to 99,999,999,999,999,999,999 (20 digits) which is a practical limit
+// for Thai currency representation and allows for uint64 maximum values
+const MaxSupportedValue = "99999999999999999999"
 
 var digitNames = map[int]string{
 	1: "หนึ่ง", 2: "สอง", 3: "สาม", 4: "สี่", 5: "ห้า",
@@ -30,9 +33,17 @@ var unitNames = map[int]string{
 // EnableWarningLogs controls whether warning logs are printed when satang is capped at 99
 var EnableWarningLogs = true
 
+// AllowOverflow controls whether rounding can overflow to the next baht amount
+var AllowOverflow = false
+
 // SetWarningLogs enables or disables warning logs for satang capping
 func SetWarningLogs(enabled bool) {
 	EnableWarningLogs = enabled
+}
+
+// SetAllowOverflow enables or disables overflow behavior for rounding
+func SetAllowOverflow(enabled bool) {
+	AllowOverflow = enabled
 }
 
 func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
@@ -48,8 +59,13 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 		return "", err
 	}
 
+	// Validate that the number doesn't exceed our maximum supported value
+	if err := validateMaxValue(amountStr); err != nil {
+		return "", err
+	}
+
 	parts := strings.Split(amountStr, ".")
-	wholePart := parts[0]
+	integerPart := parts[0]
 
 	var decimalPart string
 	var overflow bool
@@ -58,16 +74,15 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 
 		// Handle overflow case where satang rounds up to 100
 		if overflow {
-			// Increment whole part by 1
-			wholeNum, err := strconv.Atoi(wholePart)
+			integerNum, err := strconv.Atoi(integerPart)
 			if err == nil {
-				wholePart = strconv.Itoa(wholeNum + 1)
 				decimalPart = "00" // Reset to 00 satang
+				integerPart = strconv.Itoa(integerNum + 1)
 			}
 		}
 	}
 
-	bahtText := convertWholeNumber(wholePart)
+	bahtText := convertIntegerNumber(integerPart)
 	if bahtText == "" {
 		bahtText = "ศูนย์"
 	}
@@ -86,7 +101,6 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 	return bahtText, nil
 }
 
-// convertToString converts various numeric types to string representation
 func convertToString(amount any) (string, error) {
 	switch v := amount.(type) {
 	case string:
@@ -120,6 +134,31 @@ func convertToString(amount any) (string, error) {
 	}
 }
 
+// validateMaxValue checks if the input number exceeds our maximum supported value
+func validateMaxValue(amountStr string) error {
+	// Extract just the integer part (before decimal point)
+	parts := strings.Split(amountStr, ".")
+	integerPart := parts[0]
+
+	// Remove any leading zeros for comparison
+	integerPart = strings.TrimLeft(integerPart, "0")
+	if integerPart == "" {
+		integerPart = "0"
+	}
+
+	// Check if the number of digits exceeds our maximum
+	if len(integerPart) > len(MaxSupportedValue) {
+		return fmt.Errorf("input number exceeds maximum supported value of %s (got %d digits, max %d digits)", MaxSupportedValue, len(integerPart), len(MaxSupportedValue))
+	}
+
+	// If same number of digits, do string comparison (since both are numeric strings)
+	if len(integerPart) == len(MaxSupportedValue) && integerPart > MaxSupportedValue {
+		return fmt.Errorf("input number exceeds maximum supported value of %s", MaxSupportedValue)
+	}
+
+	return nil
+}
+
 func formatDecimalPartWithRounding(decimal string, roundingMode DecimalRoundingMode) (string, bool) {
 	if len(decimal) == 0 {
 		return "00", false
@@ -134,73 +173,54 @@ func formatDecimalPartWithRounding(decimal string, roundingMode DecimalRoundingM
 	// Handle more than 2 decimal places with rounding
 	if len(decimal) > 2 {
 		// Get first 2 digits and the third digit for rounding decision
-		first2 := decimal[:2]
+		first2Digits := decimal[:2]
 		thirdDigit, _ := strconv.Atoi(string(decimal[2]))
 
 		// Convert first 2 digits to integer for rounding calculation
-		value, _ := strconv.Atoi(first2)
+		value, _ := strconv.Atoi(first2Digits)
 		originalValue := value
-
-		warningMsg := "Warning: %.3s rounds to 100 satang, forced to round down to 99 satang to maintain currency format. Consider using %s mode."
+		warningMsg := "Warning: %s rounds to 100 satang, forced to round down to 99 satang to maintain currency format. Consider enabling AllowOverflow."
 
 		switch roundingMode {
 		case RoundDown:
-			// Always truncate (keep as is)
-			return first2, false
+			return first2Digits, false
 		case RoundUp:
-			// Always round up if there are any additional digits
 			if len(decimal) > 2 && thirdDigit > 0 {
 				value++
 				if value >= 100 {
-					if roundingMode == RoundUpOverflow {
-						return "00", true // Overflow to next baht
+					if AllowOverflow {
+						return "00", true
 					} else {
-						// Capping satang at 99 and log warning for special cases
 						if originalValue == 99 && EnableWarningLogs {
-							log.Printf(warningMsg, decimal, "RoundUpOverflow")
+							log.Printf(warningMsg, decimal)
 						}
 						value = 99
 					}
 				}
 			}
-		case RoundUpOverflow:
-			// Round up with overflow capability
-			if len(decimal) > 2 {
-				value++
-				if value >= 100 {
-					return "00", true // Overflow to next baht
-				}
-			}
 		case RoundHalf:
-			// Round half: round up if third digit >= 5
 			if thirdDigit >= 5 {
 				value++
 				if value >= 100 {
-					// Special case for 0.995+ - force round down and log
-					if originalValue == 99 && EnableWarningLogs {
-						log.Printf(warningMsg, decimal, "RoundHalfOverflow")
+					if AllowOverflow {
+						return "00", true
+					} else {
+						if originalValue == 99 && EnableWarningLogs {
+							log.Printf(warningMsg, decimal)
+						}
+						value = 99
 					}
-					value = 99 // Cap at 99 satang
-				}
-			}
-		case RoundHalfOverflow:
-			// Round half with overflow capability
-			if thirdDigit >= 5 {
-				value++
-				if value >= 100 {
-					return "00", true // Overflow to next baht
 				}
 			}
 		}
 
-		// Format back to 2-digit string with leading zero if needed
 		return fmt.Sprintf("%02d", value), false
 	}
 
 	return decimal, false
 }
 
-func convertWholeNumber(numberStr string) string {
+func convertIntegerNumber(numberStr string) string {
 	if !isValidNumber(numberStr) {
 		return ""
 	}
@@ -234,7 +254,6 @@ func parseDigits(numberStr string) []int {
 func buildThaiText(digits []int) string {
 	digitCount := len(digits)
 	if digitCount <= 6 {
-		// Handle numbers up to 6 digits directly
 		return convertSixDigitGroup(digits)
 	}
 
@@ -312,7 +331,6 @@ func convertDecimalPart(decimalStr string) string {
 		return ""
 	}
 
-	// Convert to integer for easy comparison
 	value, _ := strconv.Atoi(decimalStr)
 
 	// Special cases for decimal satang conversion
@@ -334,6 +352,6 @@ func convertDecimalPart(decimalStr string) string {
 		return digitNames[tens] + "สิบเอ็ด"
 	default:
 		// For all other cases, use regular conversion
-		return convertWholeNumber(decimalStr)
+		return convertIntegerNumber(decimalStr)
 	}
 }
