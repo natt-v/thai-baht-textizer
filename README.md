@@ -8,7 +8,7 @@ A Go library for converting numeric amounts to Thai text representation followin
 ✅ **Thai Language Rules**: Proper use of "เอ็ด" vs "หนึ่ง" based on position  
 ✅ **Configurable Rounding**: Three decimal rounding modes (RoundHalf, RoundDown, RoundUp)  
 ✅ **Overflow Control**: Optional overflow behavior for precise financial calculations  
-✅ **Large Numbers**: Support for numbers up to 99,999,999,999,999,999,999 (20 digits) with proper million grouping  
+✅ **Large Numbers**: Support for numbers up to 9,223,372,036,854,775,807 (19 digits) with proper million grouping  
 ✅ **Input Validation**: Validates maximum supported values and input types  
 ✅ **Error Handling**: Returns descriptive errors for unsupported types and exceeded limits  
 ✅ **Warning Logs**: Optional logging for satang capping edge cases  
@@ -178,14 +178,32 @@ result, _ = thbtextizer.Convert("100.00")
 
 ## Large Number Support
 
-```go
-// Millions with proper grouping
-result, _ := thbtextizer.Convert("999999999.99")
-// Output: "เก้าร้อยเก้าสิบเก้าล้านเก้าแสนเก้าหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าบาทเก้าสิบเก้าสตางค์"
+The library correctly handles very large numbers with proper Thai million grouping:
 
-result, _ = thbtextizer.Convert("100000001.01") 
-// Output: "หนึ่งร้อยล้านเอ็ดบาทหนึ่งสตางค์"
+```go
+// Basic millions
+result, _ := thbtextizer.Convert("1000000")
+// Output: "หนึ่งล้านบาทถ้วน"
+
+// Complex large numbers with mixed digits
+result, _ = thbtextizer.Convert("1234567889999999999")
+// Output: "หนึ่งล้านสองแสนสามหมื่นสี่พันห้าร้อยหกสิบเจ็ดล้านแปดแสนแปดหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าล้านเก้าแสนเก้าหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าบาทถ้วน"
+
+// "Telescoping zeros" pattern - multiple millions
+result, _ = thbtextizer.Convert("1000000000000000000")
+// Output: "หนึ่งล้านล้านล้านบาทถ้วน"
+
+// Maximum supported value (int64 max)
+result, _ = thbtextizer.Convert("9223372036854775807")
+// Output: "เก้าล้านสองแสนสองหมื่นสามพันสามร้อยเจ็ดสิบสองล้านสามหมื่นหกพันแปดร้อยห้าสิบสี่ล้านเจ็ดแสนเจ็ดหมื่นห้าพันแปดร้อยเจ็ดบาทถ้วน"
 ```
+
+### Thai Million Grouping Rules
+
+The library implements sophisticated logic for Thai number grouping:
+
+- **Single non-zero group**: Numbers like `1,000,000,000,000` get multiple "ล้าน" (หนึ่งล้านล้าน)
+- **Multiple non-zero groups**: Numbers like `1,234,567,889` get single "ล้าน" per group (หนึ่งล้านสองแสนสามหมื่น...)
 
 
 ## Error Handling
@@ -206,11 +224,11 @@ if err != nil {
 result, err := thbtextizer.Convert("100000000000000000000") // 21 digits
 if err != nil {
     fmt.Printf("Error: %v\n", err)
-    // Error: input number exceeds maximum supported value of 99999999999999999999 (got 21 digits, max 20 digits)
+    // Error: input number exceeds maximum supported value of 9223372036854775807 (got 21 digits, max 19 digits)
 }
 
-// Maximum supported value (20 digits)
-result, err = thbtextizer.Convert("99999999999999999999")
+// Maximum supported value (19 digits - int64 max)
+result, err = thbtextizer.Convert("9223372036854775807")
 // This works fine
 ```
 
@@ -346,5 +364,6 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release history.
 
 ### Recent Releases
 
-**v1.1.0** - Simplified API with improved overflow control
+**v1.1.1** - Critical bug fixes for large number conversion logic  
+**v1.1.0** - Simplified API with improved overflow control  
 **v1.0.0** - Initial release with full Thai baht text conversion
