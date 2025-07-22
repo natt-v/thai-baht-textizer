@@ -118,12 +118,40 @@ func TestConvert(t *testing.T) {
 			expected: "เก้าร้อยเก้าสิบเก้าล้านเก้าแสนเก้าหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าบาทเก้าสิบเก้าสตางค์",
 		},
 		{
-			input:    "1234567889999999999",
+			input:    "1,234,567,889,999,999,999",
 			expected: "หนึ่งล้านสองแสนสามหมื่นสี่พันห้าร้อยหกสิบเจ็ดล้านแปดแสนแปดหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าล้านเก้าแสนเก้าหมื่นเก้าพันเก้าร้อยเก้าสิบเก้าบาทถ้วน",
 		},
 		{
-			input:    "18446744073709551615",
-			expected: "สิบแปดล้านสี่แสนสี่หมื่นหกพันเจ็ดร้อยสี่สิบสี่ล้านเจ็ดหมื่นสามพันเจ็ดร้อยเก้าล้านห้าแสนห้าหมื่นหนึ่งพันหกร้อยสิบห้าบาทถ้วน",
+			input:    "9,223,372,036,854,775,807",
+			expected: "เก้าล้านสองแสนสองหมื่นสามพันสามร้อยเจ็ดสิบสองล้านสามหมื่นหกพันแปดร้อยห้าสิบสี่ล้านเจ็ดแสนเจ็ดหมื่นห้าพันแปดร้อยเจ็ดบาทถ้วน",
+		},
+		{
+			input:    "1,000,000,000,000,000,000",
+			expected: "หนึ่งล้านล้านล้านบาทถ้วน",
+		},
+		{
+			input:    "100,000,000,000,000,000",
+			expected: "หนึ่งแสนล้านล้านบาทถ้วน",
+		},
+		{
+			input:    "10,000,000,000,000,000",
+			expected: "หนึ่งหมื่นล้านล้านบาทถ้วน",
+		},
+		{
+			input:    "1,000,000,000,000,000",
+			expected: "หนึ่งพันล้านล้านบาทถ้วน",
+		},
+		{
+			input:    "100,000,000,000,000",
+			expected: "หนึ่งร้อยล้านล้านบาทถ้วน",
+		},
+		{
+			input:    "10,000,000,000,000",
+			expected: "สิบล้านล้านบาทถ้วน",
+		},
+		{
+			input:    "1,000,000,000,000",
+			expected: "หนึ่งล้านล้านบาทถ้วน",
 		},
 	}
 
@@ -306,11 +334,13 @@ func TestConvertWithExceedingMaxValue(t *testing.T) {
 	}{
 		// Valid values (should not error)
 		{input: MaxSupportedValue, expectError: false, description: "exact max value"},
-		{input: "18446744073709551615", expectError: false, description: "uint64 max value"},
-		{input: "1234567889999999999", expectError: false, description: "19 digits under max"},
-		{input: "12345678901234567890", expectError: false, description: "20 digits at max"},
+		{input: "9223372036854775807", expectError: false, description: "int64 max value"},
+		{input: "1234567889999999999", expectError: false, description: "19 digits under int64 max"},
 
 		// Invalid values (should error)
+		{input: "9223372036854775808", expectError: true, description: "19 digits exceeds int64 max by 1"},
+		{input: "12345678901234567890", expectError: true, description: "20 digits exceeds max"},
+		{input: "18446744073709551615", expectError: true, description: "uint64 max exceeds int64 max"},
 		{input: "100000000000000000000", expectError: true, description: "21 digits - exceeds max"},
 		{input: "999999999999999999999", expectError: true, description: "21 digits - much larger"},
 		{input: "123456789012345678901", expectError: true, description: "21 digits - way over max"},
@@ -318,7 +348,7 @@ func TestConvertWithExceedingMaxValue(t *testing.T) {
 
 		// Edge cases
 		{input: "000100000000000000000000", expectError: true, description: "leading zeros but exceeds when trimmed"},
-		{input: "000099999999999999999999", expectError: false, description: "leading zeros, valid when trimmed"},
+		{input: "0009223372036854775807", expectError: false, description: "leading zeros, valid when trimmed"},
 	}
 
 	for _, test := range tests {
@@ -428,5 +458,100 @@ func TestWarningLogControl(t *testing.T) {
 	expected := "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์"
 	if result != expected {
 		t.Errorf("Convert with logging disabled = %s, expected %s", result, expected)
+	}
+}
+
+func TestProblematicLargeNumbers(t *testing.T) {
+	// Test the specific large numbers mentioned in the issue
+	testCases := []struct {
+		input       any
+		expectError bool
+		name        string
+	}{
+		{int64(9_223_372_036_854_775_807), false, "int64 max value"},
+		{MaxSupportedValue, false, "string max supported value"},
+		{"1234567889999999999", false, "string 1234567889999999999"},
+		{"1000000000000000000", false, "string 1000000000000000000"},
+		{"9000000000000000000", false, "string 9000000000000000000"},
+		{"100000000000000000000", true, "21 digits - should fail"},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Convert(test.input)
+
+			if test.expectError {
+				if err == nil {
+					t.Errorf("Expected error for %s, but got result: %s", test.name, result)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for %s: %v", test.name, err)
+				return
+			}
+
+			t.Logf("Input: %v", test.input)
+			t.Logf("Result: %s", result)
+
+			// Basic validation - should contain "บาท" and not be empty
+			if result == "" {
+				t.Errorf("Result should not be empty for %s", test.name)
+			}
+			if !contains(result, "บาท") {
+				t.Errorf("Result should contain 'บาท' for %s, got: %s", test.name, result)
+			}
+		})
+	}
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
+}
+
+func containsMiddle(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDebugLargeNumbers(t *testing.T) {
+	// Test digit level handling for different positions
+	testCases := []struct {
+		input       any
+		description string
+	}{
+		// Test basic digit levels within 6-digit groups
+		{"1000", "thousands"},
+		{"10000", "ten thousands"},
+		{"100000", "hundred thousands"},
+		{"1000000", "1 million"},
+		{"10000000", "10 million (7 digits)"},
+		{"100000000", "100 million (8 digits)"},
+		{"1000000000", "1 billion (10 digits)"},
+		{"10000000000", "10 billion (11 digits)"},
+		{"100000000000", "100 billion (12 digits)"},
+		{"1000000000000", "1 trillion (13 digits) - debug grouping"},
+		{"1000000000000000", "1 quadrillion (16 digits) - debug grouping"},
+
+		// Test the problematic large numbers
+		{int64(9_223_372_036_854_775_807), "max int64"},
+		{MaxSupportedValue, "max supported value"},
+		{"1000000000000000000", "1 * 10^18"},
+		{"9000000000000000000", "9 * 10^18"},
+	}
+
+	for _, tc := range testCases {
+		result, err := Convert(tc.input)
+		if err != nil {
+			t.Errorf("Convert(%v) [%s] returned error: %v", tc.input, tc.description, err)
+			continue
+		}
+		t.Logf("%s (%v) → %s", tc.description, tc.input, result)
 	}
 }

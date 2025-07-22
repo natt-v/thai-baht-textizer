@@ -17,9 +17,9 @@ const (
 )
 
 // MaxSupportedValue is the maximum number we can reliably convert to Thai text
-// This is set to 99,999,999,999,999,999,999 (20 digits) which is a practical limit
-// for Thai currency representation and allows for uint64 maximum values
-const MaxSupportedValue = "99999999999999999999"
+// This is set to 9,223,372,036,854,775,807 (19 digits) which is int64 maximum
+// and a practical limit for Thai currency representation
+const MaxSupportedValue = "9223372036854775807"
 
 var digitNames = map[int]string{
 	1: "หนึ่ง", 2: "สอง", 3: "สาม", 4: "สี่", 5: "ห้า",
@@ -58,6 +58,9 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Remove commas from input (e.g., "1,234,567" -> "1234567")
+	amountStr = strings.ReplaceAll(amountStr, ",", "")
 
 	// Validate that the number doesn't exceed our maximum supported value
 	if err := validateMaxValue(amountStr); err != nil {
@@ -151,9 +154,20 @@ func validateMaxValue(amountStr string) error {
 		return fmt.Errorf("input number exceeds maximum supported value of %s (got %d digits, max %d digits)", MaxSupportedValue, len(integerPart), len(MaxSupportedValue))
 	}
 
-	// If same number of digits, do string comparison (since both are numeric strings)
-	if len(integerPart) == len(MaxSupportedValue) && integerPart > MaxSupportedValue {
-		return fmt.Errorf("input number exceeds maximum supported value of %s", MaxSupportedValue)
+	// If same number of digits, do numeric comparison
+	if len(integerPart) == len(MaxSupportedValue) {
+		// Parse both as big integers for proper comparison
+		inputNum, err1 := strconv.ParseUint(integerPart, 10, 64)
+		maxNum, err2 := strconv.ParseUint(MaxSupportedValue, 10, 64)
+
+		// If either parsing fails, fall back to string comparison
+		if err1 != nil || err2 != nil {
+			if integerPart > MaxSupportedValue {
+				return fmt.Errorf("input number exceeds maximum supported value of %s", MaxSupportedValue)
+			}
+		} else if inputNum > maxNum {
+			return fmt.Errorf("input number exceeds maximum supported value of %s", MaxSupportedValue)
+		}
 	}
 
 	return nil
@@ -251,6 +265,32 @@ func parseDigits(numberStr string) []int {
 	return digits
 }
 
+// countNonZeroGroups counts how many 6-digit groups contain non-zero digits
+func countNonZeroGroups(digits []int) int {
+	digitCount := len(digits)
+	count := 0
+
+	for startPos := digitCount; startPos > 0; startPos -= 6 {
+		endPos := max(startPos-6, 0)
+		group := digits[endPos:startPos]
+
+		// Check if group has any non-zero digits
+		hasNonZero := false
+		for _, digit := range group {
+			if digit != 0 {
+				hasNonZero = true
+				break
+			}
+		}
+
+		if hasNonZero {
+			count++
+		}
+	}
+
+	return count
+}
+
 func buildThaiText(digits []int) string {
 	digitCount := len(digits)
 	if digitCount <= 6 {
@@ -260,20 +300,37 @@ func buildThaiText(digits []int) string {
 	var result []string
 
 	// Process in groups of 6 digits from right to left
+	groupsFromRight := 0
 	for startPos := digitCount; startPos > 0; startPos -= 6 {
 		endPos := max(startPos-6, 0)
 		group := digits[endPos:startPos]
 		groupText := convertSixDigitGroup(group)
 
 		if groupText != "" {
-			millionLevel := (digitCount - startPos) / 6
+			// Add "ล้าน" suffix based on pattern:
+			// - For numbers where most groups are zeros (like 1,000,000,000,000):
+			//   the non-zero group gets multiple ล้าน based on total groups
+			// - For numbers with digits in multiple groups:
+			//   each group gets single ล้าน except rightmost
 
-			if millionLevel > 0 {
-				groupText += "ล้าน"
+			// Check if this is a "telescoping zeros" pattern by counting non-zero groups
+			hasMultipleNonZeroGroups := countNonZeroGroups(digits)
+
+			if hasMultipleNonZeroGroups > 1 {
+				// Multiple groups have non-zero digits: use single ล้าน rule
+				if groupsFromRight > 0 {
+					groupText += "ล้าน"
+				}
+			} else {
+				// Only one group has non-zero digits: use multiple ล้าน rule
+				for i := 0; i < groupsFromRight; i++ {
+					groupText += "ล้าน"
+				}
 			}
 
 			result = append([]string{groupText}, result...)
 		}
+		groupsFromRight++
 	}
 
 	return strings.Join(result, "")

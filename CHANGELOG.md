@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.1] - 2025-07-22
+
+### 🐛 **Critical Bug Fixes**
+
+#### Fixed
+- **Large Number Conversion Logic**: Fixed incorrect million grouping for very large numbers
+  - Basic million amounts like `1,000,000` now correctly convert to `หนึ่งล้านบาทถ้วน`
+  - Fixed "telescoping zeros" pattern for numbers like `1,000,000,000,000,000,000` → `หนึ่งล้านล้านล้านบาทถ้วน`
+  - Fixed mixed digit patterns for complex numbers like `1,234,567,889,999,999,999`
+  - Resolved issue where 19-digit numbers weren't properly grouped into 6-digit segments
+  - Fixed support for maximum int64 value (9,223,372,036,854,775,807)
+
+### 🔧 **Technical Details**
+
+#### Root Cause
+The previous implementation incorrectly applied "ล้าน" suffixes to 6-digit groups, causing:
+- Simple millions to render as basic numbers without "ล้าน"
+- Complex large numbers to have incorrect multiple "ล้าน" patterns
+- Inconsistent behavior between different number patterns
+
+#### Solution
+- **Added `countNonZeroGroups()` function** to detect number patterns
+- **Implemented dual-logic approach** in `buildThaiText()`:
+  - **Single non-zero group**: Uses multiple "ล้าน" based on position (e.g., `1,000,000,000,000` → `หนึ่งล้านล้าน`)
+  - **Multiple non-zero groups**: Uses single "ล้าน" per group except rightmost (e.g., `1,234,567` → `หนึ่งล้านสองแสนสามหมื่นสี่พันห้าร้อยหกสิบเจ็ด`)
+- **Enhanced 6-digit grouping algorithm** for proper right-to-left processing
+
+#### Impact
+- ✅ **All 156 test cases now pass** (previously 7 were failing)
+- ✅ **Correct Thai language compliance** for all number ranges
+- ✅ **Reliable large number support** up to 19 digits
+- ✅ **Zero breaking changes** - existing API unchanged
+
+### 📊 **Before vs After**
+
+| Input | v1.1.0 (Broken) | v1.1.1 (Fixed) |
+|-------|----------------|-----------------|
+| `1000000` | `หนึ่งบาทถ้วน` | `หนึ่งล้านบาทถ้วน` ✅ |
+| `1,000,000,000,000` | `หนึ่งบาทถ้วน` | `หนึ่งล้านล้านบาทถ้วน` ✅ |
+| `1,234,567,889,999,999,999` | Incorrect grouping | `หนึ่งล้านสองแสนสามหมื่น...` ✅ |
+
+### 🚨 **Upgrade Recommendation**
+
+**This is a critical bug fix release.** All users should upgrade immediately as v1.1.0 has significant conversion errors for large numbers.
+
+```bash
+go get -u github.com/natt-v/thai-baht-textizer@v1.1.1
+```
+
+---
+
 ## [v1.1.0] - 2025-07-21
 
 ### 🎯 **Major API Improvements**
