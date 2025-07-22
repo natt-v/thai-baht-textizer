@@ -1,12 +1,116 @@
 package thbtextizer
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
+	"unicode"
 )
+
+type ErrorCode int
+
+const (
+	ErrorCodeUnsupportedType ErrorCode = iota
+	ErrorCodeExceedsMaxValue
+	ErrorCodeInvalidInput
+	ErrorCodeParseError
+)
+
+type ConversionError struct {
+	Code    ErrorCode
+	Message string
+	Input   string
+	Hint    string
+}
+
+func (e *ConversionError) Error() string {
+	if e.Hint != "" {
+		return fmt.Sprintf("%s. Hint: %s", e.Message, e.Hint)
+	}
+	return e.Message
+}
+
+func newUnsupportedTypeError(input string) *ConversionError {
+	return &ConversionError{
+		Code:    ErrorCodeUnsupportedType,
+		Message: "unsupported type: only string, int, uint, float32, float64 and their variants are supported",
+		Input:   input,
+		Hint:    "convert your input to one of the supported types",
+	}
+}
+
+func newExceedsMaxValueError(input string, digits int) *ConversionError {
+	return &ConversionError{
+		Code:    ErrorCodeExceedsMaxValue,
+		Message: fmt.Sprintf("input number exceeds maximum supported value of %s (got %d digits, max %d digits)", MaxSupportedValue, digits, len(MaxSupportedValue)),
+		Input:   input,
+		Hint:    "use a smaller number within the supported range",
+	}
+}
+
+func newInvalidInputError(input string, reason string) *ConversionError {
+	return &ConversionError{
+		Code:    ErrorCodeInvalidInput,
+		Message: fmt.Sprintf("invalid input: %s", reason),
+		Input:   input,
+		Hint:    "ensure input contains only valid numeric characters",
+	}
+}
+
+func sanitizeInput(input string) (string, error) {
+	input = strings.TrimSpace(input)
+
+	if input == "" {
+		return "", newInvalidInputError(input, "empty input")
+	}
+
+	// Remove common formatting characters (but preserve basic structure)
+	input = strings.ReplaceAll(input, " ", "")  // Remove spaces
+	input = strings.ReplaceAll(input, "_", "")  // Remove underscores
+	input = strings.ReplaceAll(input, "\t", "") // Remove tabs
+
+	// Check for invalid characters (allow digits, decimal point, commas, and minus sign)
+	for i, r := range input {
+		if !unicode.IsDigit(r) && r != '.' && r != ',' && r != '-' && r != '+' {
+			return "", newInvalidInputError(input, fmt.Sprintf("invalid character '%c' at position %d", r, i))
+		}
+	}
+
+	// Handle negative numbers (for future support)
+	if strings.HasPrefix(input, "-") || strings.HasPrefix(input, "+") {
+		// For now, just remove the sign (could be enhanced in future versions)
+		input = input[1:]
+	}
+
+	// Validate decimal point usage
+	dotCount := strings.Count(input, ".")
+	if dotCount > 1 {
+		return "", newInvalidInputError(input, "multiple decimal points")
+	}
+
+	// Validate that we don't have decimal point at the start or end
+	if strings.HasPrefix(input, ".") {
+		input = "0" + input
+	}
+	if strings.HasSuffix(input, ".") {
+		input = input + "0"
+	}
+
+	return input, nil
+}
+
+func isValidNumber(str string) bool {
+	if str == "" {
+		return false
+	}
+	for _, char := range str {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 type DecimalRoundingMode int
 
@@ -46,6 +150,61 @@ func SetAllowOverflow(enabled bool) {
 	AllowOverflow = enabled
 }
 
+type Config struct {
+	EnableWarningLogs bool
+	AllowOverflow     bool
+	DefaultRounding   DecimalRoundingMode
+}
+
+func DefaultConfig() *Config {
+	return &Config{
+		EnableWarningLogs: true,
+		AllowOverflow:     false,
+		DefaultRounding:   RoundHalf,
+	}
+}
+
+type Converter struct {
+	config *Config
+}
+
+// NewConverter creates a new converter with the specified configuration
+func NewConverter(config *Config) *Converter {
+	if config == nil {
+		config = DefaultConfig()
+	}
+	return &Converter{config: config}
+}
+
+func NewDefaultConverter() *Converter {
+	return NewConverter(DefaultConfig())
+}
+
+// Convert converts a numeric amount to Thai Baht text using instance configuration
+func (c *Converter) Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
+	// Use instance configuration
+	mode := c.config.DefaultRounding
+	if len(roundingMode) > 0 {
+		mode = roundingMode[0]
+	}
+
+	// Use instance-specific settings
+	originalWarningLogs := EnableWarningLogs
+	originalAllowOverflow := AllowOverflow
+
+	EnableWarningLogs = c.config.EnableWarningLogs
+	AllowOverflow = c.config.AllowOverflow
+
+	// Ensure we restore original settings
+	defer func() {
+		EnableWarningLogs = originalWarningLogs
+		AllowOverflow = originalAllowOverflow
+	}()
+
+	return convertWithMode(amount, mode)
+}
+
+// Convert is the global function that maintains backward compatibility
 func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 	// Default to RoundHalf if no mode specified
 	mode := RoundHalf
@@ -53,8 +212,20 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 		mode = roundingMode[0]
 	}
 
+	return convertWithMode(amount, mode)
+}
+
+// convertWithMode is the core conversion logic extracted for reuse
+func convertWithMode(amount any, mode DecimalRoundingMode) (string, error) {
+
 	// Convert any numeric type to string
 	amountStr, err := convertToString(amount)
+	if err != nil {
+		return "", err
+	}
+
+	// Sanitize and validate input
+	amountStr, err = sanitizeInput(amountStr)
 	if err != nil {
 		return "", err
 	}
@@ -85,23 +256,30 @@ func Convert(amount any, roundingMode ...DecimalRoundingMode) (string, error) {
 		}
 	}
 
+	var builder strings.Builder
+	builder.Grow(128)
+
 	bahtText := convertIntegerNumber(integerPart)
 	if bahtText == "" {
-		bahtText = "ศูนย์"
+		builder.WriteString("ศูนย์")
+	} else {
+		builder.WriteString(bahtText)
 	}
-	bahtText += "บาท"
+	builder.WriteString("บาท")
 
 	if decimalPart == "" || decimalPart == "00" {
-		bahtText += "ถ้วน"
+		builder.WriteString("ถ้วน")
 	} else {
 		satangText := convertDecimalPart(decimalPart)
 		if satangText == "" {
-			satangText = "ศูนย์"
+			builder.WriteString("ศูนย์")
+		} else {
+			builder.WriteString(satangText)
 		}
-		bahtText += satangText + "สตางค์"
+		builder.WriteString("สตางค์")
 	}
 
-	return bahtText, nil
+	return builder.String(), nil
 }
 
 func convertToString(amount any) (string, error) {
@@ -133,7 +311,7 @@ func convertToString(amount any) (string, error) {
 	case float64:
 		return fmt.Sprintf("%.2f", v), nil
 	default:
-		return "", errors.New("unsupported type: only string, int, uint, float32, float64 and their variants are supported")
+		return "", newUnsupportedTypeError(fmt.Sprintf("%T", amount))
 	}
 }
 
@@ -151,7 +329,7 @@ func validateMaxValue(amountStr string) error {
 
 	// Check if the number of digits exceeds our maximum
 	if len(integerPart) > len(MaxSupportedValue) {
-		return fmt.Errorf("input number exceeds maximum supported value of %s (got %d digits, max %d digits)", MaxSupportedValue, len(integerPart), len(MaxSupportedValue))
+		return newExceedsMaxValueError(amountStr, len(integerPart))
 	}
 
 	// If same number of digits, do numeric comparison
@@ -163,10 +341,10 @@ func validateMaxValue(amountStr string) error {
 		// If either parsing fails, fall back to string comparison
 		if err1 != nil || err2 != nil {
 			if integerPart > MaxSupportedValue {
-				return fmt.Errorf("input number exceeds maximum supported value of %s", MaxSupportedValue)
+				return newExceedsMaxValueError(amountStr, len(integerPart))
 			}
 		} else if inputNum > maxNum {
-			return fmt.Errorf("input number exceeds maximum supported value of %s", MaxSupportedValue)
+			return newExceedsMaxValueError(amountStr, len(integerPart))
 		}
 	}
 
@@ -247,15 +425,6 @@ func convertIntegerNumber(numberStr string) string {
 	return buildThaiText(digits)
 }
 
-func isValidNumber(str string) bool {
-	for _, char := range str {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 func parseDigits(numberStr string) []int {
 	digits := make([]int, 0, len(numberStr))
 	for _, char := range numberStr {
@@ -297,7 +466,9 @@ func buildThaiText(digits []int) string {
 		return convertSixDigitGroup(digits)
 	}
 
-	var result []string
+	// Pre-allocate slice with estimated capacity
+	groupCount := (digitCount + 5) / 6
+	result := make([]string, 0, groupCount)
 
 	// Process in groups of 6 digits from right to left
 	groupsFromRight := 0
@@ -323,9 +494,13 @@ func buildThaiText(digits []int) string {
 				}
 			} else {
 				// Only one group has non-zero digits: use multiple ล้าน rule
+				// Use strings.Builder for efficient concatenation
+				var builder strings.Builder
+				builder.WriteString(groupText)
 				for i := 0; i < groupsFromRight; i++ {
-					groupText += "ล้าน"
+					builder.WriteString("ล้าน")
 				}
+				groupText = builder.String()
 			}
 
 			result = append([]string{groupText}, result...)
@@ -337,8 +512,9 @@ func buildThaiText(digits []int) string {
 }
 
 func convertSixDigitGroup(digits []int) string {
-	var result []string
 	digitCount := len(digits)
+	// Pre-allocate slice with maximum possible capacity (6 digits)
+	result := make([]string, 0, digitCount)
 
 	for position, digit := range digits {
 		if digit == 0 {

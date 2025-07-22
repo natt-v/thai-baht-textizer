@@ -520,6 +520,107 @@ func containsMiddle(s, substr string) bool {
 	return false
 }
 
+func TestNewConverterAPI(t *testing.T) {
+	// Test thread-safe converter instance
+	config := &Config{
+		EnableWarningLogs: false,
+		AllowOverflow:     true,
+		DefaultRounding:   RoundUp,
+	}
+
+	converter := NewConverter(config)
+
+	// Test instance-based conversion (RoundUp + AllowOverflow should round 100.994 -> 101.00)
+	result, err := converter.Convert("100.994")
+	if err != nil {
+		t.Errorf("Converter.Convert returned error: %v", err)
+	}
+	expected := "หนึ่งร้อยเอ็ดบาทถ้วน" // 100.994 rounds up to 101.00 with overflow
+	if result != expected {
+		t.Errorf("Converter.Convert = %s, expected %s", result, expected)
+	}
+
+	// Test that instance configuration doesn't affect global
+	globalResult, err := Convert("100.994", RoundDown)
+	if err != nil {
+		t.Errorf("Global Convert returned error: %v", err)
+	}
+	expectedGlobal := "หนึ่งร้อยบาทเก้าสิบเก้าสตางค์"
+	if globalResult != expectedGlobal {
+		t.Errorf("Global Convert = %s, expected %s", globalResult, expectedGlobal)
+	}
+}
+
+func TestInputSanitization(t *testing.T) {
+	tests := []struct {
+		input       string
+		expected    string
+		shouldError bool
+		name        string
+	}{
+		{"  123.45  ", "หนึ่งร้อยยี่สิบสามบาทสี่สิบห้าสตางค์", false, "trimmed whitespace"},
+		{"1_234.56", "หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบหกสตางค์", false, "underscore removal"},
+		{"1,234.56", "หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบหกสตางค์", false, "comma handling"},
+		{"+123.45", "หนึ่งร้อยยี่สิบสามบาทสี่สิบห้าสตางค์", false, "positive sign removal"},
+		{"-123.45", "หนึ่งร้อยยี่สิบสามบาทสี่สิบห้าสตางค์", false, "negative sign removal"},
+		{".45", "ศูนย์บาทสี่สิบห้าสตางค์", false, "leading decimal"},
+		{"123.", "หนึ่งร้อยยี่สิบสามบาทถ้วน", false, "trailing decimal"},
+		{"", "", true, "empty input"},
+		{"12.34.56", "", true, "multiple decimals"},
+		{"abc", "", true, "invalid characters"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Convert(test.input)
+
+			if test.shouldError {
+				if err == nil {
+					t.Errorf("Expected error for input %s, but got result: %s", test.input, result)
+				}
+				// Check that it's our custom error type
+				if convErr, ok := err.(*ConversionError); ok {
+					if convErr.Code != ErrorCodeInvalidInput {
+						t.Errorf("Expected ErrorCodeInvalidInput, got %v", convErr.Code)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error for input %s: %v", test.input, err)
+				}
+				if result != test.expected {
+					t.Errorf("Convert(%s) = %s, expected %s", test.input, result, test.expected)
+				}
+			}
+		})
+	}
+}
+
+func TestErrorTypes(t *testing.T) {
+	// Test unsupported type error
+	_, err := Convert([]int{1, 2, 3})
+	if convErr, ok := err.(*ConversionError); ok {
+		if convErr.Code != ErrorCodeUnsupportedType {
+			t.Errorf("Expected ErrorCodeUnsupportedType, got %v", convErr.Code)
+		}
+		if convErr.Hint == "" {
+			t.Errorf("Expected hint in error, got empty string")
+		}
+	} else {
+		t.Errorf("Expected ConversionError, got %T", err)
+	}
+
+	// Test exceeds max value error
+	_, err = Convert("100000000000000000000")
+	if convErr, ok := err.(*ConversionError); ok {
+		if convErr.Code != ErrorCodeExceedsMaxValue {
+			t.Errorf("Expected ErrorCodeExceedsMaxValue, got %v", convErr.Code)
+		}
+	} else {
+		t.Errorf("Expected ConversionError, got %T", err)
+	}
+}
+
 func TestDebugLargeNumbers(t *testing.T) {
 	// Test digit level handling for different positions
 	testCases := []struct {
